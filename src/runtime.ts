@@ -21,6 +21,7 @@ import { buildShadowSessionContext } from "./acp-projection.js";
 import {
   decideFinalResponse,
   decideHeartbeat,
+  extractToolNames,
   shouldEvaluateFinalResponse,
   shouldEvaluateHeartbeat,
 } from "./scheduler.js";
@@ -165,14 +166,16 @@ export class ShadowMindRuntime {
 
     this.pi.on("turn_end", async (event, ctx) => {
       this.latestContext = ctx;
-      if (!shouldEvaluateHeartbeat(event.toolResults)) {
+      const toolResults = event.toolResults ?? [];
+      const executedTools = extractToolNames(toolResults);
+      if (executedTools.size === 0) {
         this.record("heartbeat-skipped", {
           reason: "no-tool-activity",
           modelCalls: this.modelCalls,
         });
         return;
       }
-      await this.onHeartbeat(ctx);
+      await this.onHeartbeat(ctx, executedTools);
     });
 
     this.pi.on("agent_end", (event, ctx) => {
@@ -274,8 +277,19 @@ export class ShadowMindRuntime {
     );
   }
 
-  private async onHeartbeat(ctx: ExtensionContext): Promise<void> {
+  private async onHeartbeat(
+    ctx: ExtensionContext,
+    executedTools: ReadonlySet<string>,
+  ): Promise<void> {
     const snapshot = await this.refresh(ctx);
+    const config = this.configStore.current;
+    if (!shouldEvaluateHeartbeat(executedTools, config.heartbeatTools)) {
+      this.record("heartbeat-skipped", {
+        reason: "tool-filtered",
+        modelCalls: this.modelCalls,
+      });
+      return;
+    }
     if (this.paused || !ctx.model) {
       this.record("heartbeat-skipped", {
         reason: this.paused ? "paused" : "no-model",
@@ -285,10 +299,10 @@ export class ShadowMindRuntime {
     }
     const fullModelId = `${ctx.model.provider}/${ctx.model.id}`;
     const decision = decideHeartbeat({
-      heartbeatProbability: this.configStore.current.heartbeatProbability,
+      heartbeatProbability: config.heartbeatProbability,
       availableSlots: Math.max(
         0,
-        this.configStore.current.maxParallelShadows - this.active.size,
+        config.maxParallelShadows - this.active.size,
       ),
       shadows: snapshot.shadows,
       activeShadowIds: new Set(
@@ -296,6 +310,7 @@ export class ShadowMindRuntime {
       ),
       mainModelId: fullModelId,
       random: this.random,
+      executedTools,
     });
     this.record("heartbeat", {
       modelCalls: this.modelCalls,
@@ -310,6 +325,9 @@ export class ShadowMindRuntime {
         : {}),
       ...(decision.runningExcluded.length
         ? { runningExcluded: decision.runningExcluded }
+        : {}),
+      ...(decision.toolFiltered.length
+        ? { toolFiltered: decision.toolFiltered }
         : {}),
     });
     if (!decision.activated.length) return;
