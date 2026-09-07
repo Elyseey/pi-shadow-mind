@@ -5,7 +5,10 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShadowMindRuntime } from "../src/runtime.js";
 import type { ShadowRunResult } from "../src/shadow-runner.js";
-import type { RegistrySnapshot, ShadowDefinition } from "../src/types.js";
+import type {
+  RegistrySnapshot,
+  ShadowDefinition,
+} from "../src/types.js";
 import { zeroUsage, type ShadowUsage } from "../src/usage.js";
 
 type EventHandler = (event: unknown, context: ExtensionContext) => unknown;

@@ -16,6 +16,7 @@ import { EntityStore } from "./entity-store.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
+import { ReportBrowser } from "./report-browser.js";
 import { createRandom } from "./random.js";
 import { buildShadowSessionContext } from "./acp-projection.js";
 import {
@@ -99,6 +100,7 @@ export class ShadowMindRuntime {
     completedAt: string;
     result: ShadowRunResult;
   }> = [];
+  private readonly reports = new ReportBrowser();
   private readonly batcher: ReportBatcher;
   private readonly sessionLifetime = new SessionLifetime();
   private epoch = 0;
@@ -140,6 +142,7 @@ export class ShadowMindRuntime {
       this.completedWithFinalText = false;
       this.sessionUsage = zeroUsage();
       this.recentRuns.length = 0;
+      this.reports.reset();
       await this.configStore.initialize();
       await this.usageStore.initialize();
       this.random = createRandom(this.configStore.current.randomSeed);
@@ -213,6 +216,7 @@ export class ShadowMindRuntime {
         if (!result.settled) this.active.clear();
       }
       await this.usageStore.flush();
+      this.reports.reset();
       ctx.ui.setStatus("shadow-mind", undefined);
       ctx.ui.setWidget("shadow-mind-panel", undefined);
       this.sessionLifetime.deactivate();
@@ -237,6 +241,7 @@ export class ShadowMindRuntime {
           this.setPaused(!this.paused, ctx);
           return;
         }
+        if (await this.reports.handleCommand(command, ctx)) return;
         if (command === "status") {
           await this.refresh(ctx);
           ctx.ui.notify(
@@ -520,7 +525,7 @@ export class ShadowMindRuntime {
       count: current.length,
     });
     const idle = this.latestContext?.isIdle() ?? true;
-    this.sessionLifetime.run(() => {
+    const delivered = this.sessionLifetime.run(() => {
       this.pi.sendMessage(
         {
           customType: "shadow-report",
@@ -536,6 +541,7 @@ export class ShadowMindRuntime {
         { triggerTurn: true, deliverAs: idle ? "followUp" : "steer" },
       );
     });
+    if (delivered) this.reports.add(current);
   }
 
   private async refresh(ctx: ExtensionContext): Promise<RegistrySnapshot> {
@@ -668,7 +674,7 @@ export class ShadowMindRuntime {
           : "";
         return `${new Date(event.at).toLocaleTimeString("en-GB", { hour12: false })} ${event.kind}${detail}`;
       }),
-      "Shortcut: Alt+S toggle · Commands: /shadow toggle | pause | resume | status | hide",
+      "Shortcut: Alt+S toggle · Commands: /shadow toggle | pause | resume | status | hide | reports",
     ];
   }
 }
