@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReportBatcher } from "../src/report-batcher.js";
 import { ShadowMindRuntime } from "../src/runtime.js";
 import type { ShadowRunResult } from "../src/shadow-runner.js";
 import type {
@@ -23,8 +24,15 @@ interface RuntimeInternals {
   };
   completionReview: {
     schedule: (...args: unknown[]) => boolean;
+    invalidate: () => void;
   };
+  runner: {
+    run: (...args: unknown[]) => Promise<ShadowRunResult>;
+  };
+  batcher: ReportBatcher;
   refresh: (ctx: ExtensionContext) => Promise<RegistrySnapshot>;
+  onFinalResponse: (ctx: ExtensionContext) => Promise<void>;
+  finalResponseRounds: Map<string, number>;
   registerEvents: () => void;
   onHeartbeat: (ctx: ExtensionContext, executedTools: ReadonlySet<string>) => Promise<void>;
   recentEvents: Array<{ kind: string; data?: Record<string, unknown> }>;
@@ -59,6 +67,7 @@ function createRuntimeHarness() {
     on: (name: string, handler: EventHandler) => {
       handlers.set(name, handler);
     },
+    getAllTools: () => [],
   } as unknown as ExtensionAPI);
   const internals = runtime as unknown as RuntimeInternals;
   return { handlers, internals };
@@ -126,6 +135,152 @@ describe("ShadowMindRuntime session lifecycle", () => {
     expect(internals.refresh).not.toHaveBeenCalled();
     await agentSettled!({}, context);
     expect(internals.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("does not consume a round for an invalidated queued final review", async () => {
+    const { internals } = createRuntimeHarness();
+    const finalShadow = { ...shadow, trigger: ["final_response"] as const, activeForModels: ["openai/gpt"], finalResponseRounds: 1 };
+    internals.refresh = vi.fn().mockResolvedValue({
+      shadows: [finalShadow],
+      diagnostics: [],
+    });
+    internals.active.set("heartbeat-a", { shadow, epoch: 0 });
+    internals.active.set("heartbeat-b", { shadow, epoch: 0 });
+    const context = {
+      model: { provider: "openai", id: "gpt" },
+      getSystemPrompt: () => "",
+      sessionManager: {
+        getEntries: () => [],
+        getLeafId: () => null,
+        getSessionFile: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+
+    await internals.onFinalResponse(context);
+    expect(internals.finalResponseRounds.get(finalShadow.id)).toBeUndefined();
+
+    internals.completionReview.invalidate();
+    await internals.onFinalResponse(context);
+
+    expect(internals.recentEvents.at(-1)?.data?.activated).toEqual([finalShadow.id]);
+  });
+
+  it("does not consume a round if review is invalidated while running", async () => {
+    const { internals } = createRuntimeHarness();
+    const finalShadow = {
+      ...shadow,
+      trigger: ["final_response"] as const,
+      activeForModels: ["openai/gpt"],
+      finalResponseRounds: 1,
+    };
+    internals.refresh = vi.fn().mockResolvedValue({
+      shadows: [finalShadow],
+      diagnostics: [],
+    });
+    internals.runner.run = vi.fn(
+      () => new Promise<ShadowRunResult>(() => undefined),
+    );
+    const context = {
+      model: { provider: "openai", id: "gpt" },
+      getSystemPrompt: () => "",
+      sessionManager: {
+        getEntries: () => [],
+        getLeafId: () => null,
+        getSessionFile: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+
+    await internals.onFinalResponse(context);
+    expect(internals.finalResponseRounds.get(finalShadow.id)).toBeUndefined();
+
+    internals.completionReview.invalidate();
+    await internals.onFinalResponse(context);
+
+    expect(internals.recentEvents.at(-1)?.data?.activated).toEqual([
+      finalShadow.id,
+    ]);
+  });
+
+  it("flushes pending reports and skips scheduling when batcher has pending reports", async () => {
+    const { internals } = createRuntimeHarness();
+    const finalShadow = {
+      ...shadow,
+      trigger: ["final_response"] as const,
+      activeForModels: ["openai/gpt"],
+      finalResponseRounds: 1,
+    };
+    internals.refresh = vi.fn().mockResolvedValue({
+      shadows: [finalShadow],
+      diagnostics: [],
+    });
+    const schedule = vi.spyOn(internals.completionReview, "schedule");
+    internals.batcher.add({
+      shadowId: "heartbeat",
+      shadowName: "heartbeat",
+      content: "issue found",
+      epoch: 0,
+      runId: "run-hb",
+    });
+    expect(internals.batcher.hasPending).toBe(true);
+
+    const context = {
+      model: { provider: "openai", id: "gpt" },
+      getSystemPrompt: () => "",
+      sessionManager: {
+        getEntries: () => [],
+        getLeafId: () => null,
+        getSessionFile: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+
+    await internals.onFinalResponse(context);
+
+    expect(schedule).not.toHaveBeenCalled();
+    expect(internals.batcher.hasPending).toBe(false);
+  });
+
+  it("limits final-response rounds per Shadow until new user input", async () => {
+    const { handlers, internals } = createRuntimeHarness();
+    const finalShadow = { ...shadow, trigger: ["final_response"] as const, activeForModels: ["openai/gpt"], finalResponseRounds: 1 };
+    internals.refresh = vi.fn().mockResolvedValue({
+      shadows: [finalShadow],
+      diagnostics: [],
+    });
+    internals.runner.run = vi.fn().mockResolvedValue({
+      shadowId: finalShadow.id,
+      reason: "silent",
+      durationMs: 10,
+      usage: zeroUsage(),
+    });
+    const schedule = vi.spyOn(internals.completionReview, "schedule");
+    internals.registerEvents();
+    const context = {
+      model: { provider: "openai", id: "gpt" },
+      getSystemPrompt: () => "",
+      sessionManager: {
+        getEntries: () => [],
+        getLeafId: () => null,
+        getSessionFile: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+    const finalEvent = {
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      ],
+    };
+
+    await handlers.get("agent_end")!(finalEvent, context);
+    await handlers.get("agent_settled")!({}, context);
+    await handlers.get("agent_end")!(finalEvent, context);
+    await handlers.get("agent_settled")!({}, context);
+
+    expect(schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0)).toHaveLength(1);
+
+    handlers.get("input")!({ source: "interactive" }, context);
+    await handlers.get("agent_end")!(finalEvent, context);
+    await handlers.get("agent_settled")!({}, context);
+
+    expect(schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0)).toHaveLength(2);
   });
 
   it("abandons a final-review start superseded by new input during refresh", async () => {

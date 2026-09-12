@@ -90,9 +90,18 @@ export class ShadowMindRuntime {
     activeCount: () => this.active.size,
     activeShadowIds: () =>
       new Set([...this.active.values()].map(({ shadow }) => shadow.id)),
+    canLaunch: () => !this.batcher.hasPending,
     launch: (pending, review) =>
       this.launchShadow({ ...pending, completionReview: review }),
     deliver: (reports) => void this.deliverReports(reports),
+    onReviewCompleted: (shadowIds) => {
+      for (const id of shadowIds) {
+        this.finalResponseRounds.set(
+          id,
+          (this.finalResponseRounds.get(id) ?? 0) + 1,
+        );
+      }
+    },
   });
   private readonly recentEvents: RuntimeEvent[] = [];
   private readonly recentRuns: Array<{
@@ -112,6 +121,7 @@ export class ShadowMindRuntime {
   private sessionUsage: ShadowUsage = zeroUsage();
   private shadowCount = 0;
   private completedWithFinalText = false;
+  private readonly finalResponseRounds = new Map<string, number>();
   private random: () => number = Math.random;
 
   constructor(private readonly pi: ExtensionAPI) {
@@ -140,6 +150,7 @@ export class ShadowMindRuntime {
       this.latestContext = ctx;
       this.modelCalls = 0;
       this.completedWithFinalText = false;
+      this.finalResponseRounds.clear();
       this.sessionUsage = zeroUsage();
       this.recentRuns.length = 0;
       this.reports.reset();
@@ -158,6 +169,7 @@ export class ShadowMindRuntime {
       this.latestContext = ctx;
       if (event.source === "extension") return;
       this.completedWithFinalText = false;
+      this.finalResponseRounds.clear();
       this.epoch += 1;
       this.abortAll("new-user-input");
     });
@@ -358,6 +370,10 @@ export class ShadowMindRuntime {
   }
 
   private async onFinalResponse(ctx: ExtensionContext): Promise<void> {
+    if (this.batcher.hasPending) {
+      await this.batcher.flush();
+      return;
+    }
     const request = this.completionReview.begin(this.epoch);
     const snapshot = await this.refresh(ctx);
     if (!this.completionReview.isCurrent(request)) {
@@ -376,6 +392,7 @@ export class ShadowMindRuntime {
     const decision = decideFinalResponse({
       shadows: snapshot.shadows,
       mainModelId: fullModelId,
+      finalResponseRounds: this.finalResponseRounds,
     });
     this.record("final-response", {
       candidates: decision.candidates,
@@ -385,6 +402,9 @@ export class ShadowMindRuntime {
         : {}),
       ...(decision.runningExcluded.length
         ? { runningExcluded: decision.runningExcluded }
+        : {}),
+      ...(decision.roundFiltered.length
+        ? { roundFiltered: decision.roundFiltered }
         : {}),
     });
     if (!decision.activated.length) {
