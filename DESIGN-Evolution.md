@@ -60,4 +60,4 @@
 
 - 发生：PR #11 与 issue #10 记录到同一用户任务内的反复整改：终检报告触发 Main 修订后，新的最终回复再次触发同一 Shadow，缺少停止条件；heartbeat 报告接力也会持续唤醒整改轮。
 - 分析：跳过由 shadow-report 触发的修复轮会失去对修订结果的复核，统一预算又涉及整个调度层、不适合放进单个 Shadow 定义。因此停止条件放在单个 Shadow 的完成检查上：整批审查进入终态后才提交轮次，被新输入、新报告或会话切换失效的检查不消耗配额；超时或错误的运行同样提交一次尝试，避免对同一用户任务重复重试。存在待交付的 heartbeat 报告时先交付已知问题，避免在旧文本上启动终检并浪费有限的验收轮次。缺省与 0 都表示不限制，维持现有默认行为。
-- 改变：新增 `final_response_rounds` frontmatter 字段与调度过滤；Runtime 随用户输入和 Session 开始重置轮次计数并在整批完成时提交；CompletionReview 增加完成回调，FinalResponseQueue 增加启动门禁，batcher 有待交付报告时优先刷新。heartbeat 接力、跨 Shadow 统一预算与 stop 后不自动 follow-up 仍留在 issue #10。
+- 改变：新增 `final_response_rounds` frontmatter 字段与调度过滤；独立的 FinalResponseBudget 拥有轮次语义、计数与重置，Runtime 只接线 Session 生命周期与整批完成回调；CompletionReview 增加完成回调，FinalResponseQueue 增加启动门禁，batcher 有待交付报告时优先刷新。heartbeat 接力、跨 Shadow 统一预算与 stop 后不自动 follow-up 仍留在 issue #10。

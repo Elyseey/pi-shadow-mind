@@ -136,7 +136,7 @@ export function decideHeartbeat(options: {
 export function decideFinalResponse(options: {
   shadows: readonly ShadowDefinition[];
   mainModelId: string;
-  finalResponseRounds?: ReadonlyMap<string, number>;
+  canRunFinalResponse?: (shadow: ShadowDefinition) => boolean;
 }): ShadowActivationDecision {
   const modelFiltered: string[] = [];
   const roundFiltered: string[] = [];
@@ -148,11 +148,7 @@ export function decideFinalResponse(options: {
         modelFiltered.push(shadow.id);
         return false;
       }
-      const maxRounds = shadow.finalResponseRounds ?? 0;
-      if (
-        maxRounds > 0 &&
-        (options.finalResponseRounds?.get(shadow.id) ?? 0) >= maxRounds
-      ) {
+      if (options.canRunFinalResponse && !options.canRunFinalResponse(shadow)) {
         roundFiltered.push(shadow.id);
         return false;
       }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FinalResponseBudget } from "../src/final-response-budget.js";
 import {
   decideFinalResponse,
   decideHeartbeat,
@@ -263,10 +264,12 @@ describe("decideFinalResponse", () => {
   it("filters a Shadow after its final-response round limit", () => {
     const limited = shadow("limited", 1, ["final_response"], [], 1);
     const unlimited = shadow("unlimited", 1, ["final_response"]);
+    const budget = new FinalResponseBudget();
+    budget.commit(["limited"]);
     const result = decideFinalResponse({
       shadows: [limited, unlimited],
       mainModelId: "openai/gpt",
-      finalResponseRounds: new Map([["limited", 1]]),
+      canRunFinalResponse: (candidate) => budget.canRun(candidate),
     });
     expect(result.activated.map(({ shadow }) => shadow.id)).toEqual([
       "unlimited",

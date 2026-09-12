@@ -13,6 +13,7 @@ import {
 } from "./completion-review.js";
 import { ConfigStore } from "./config.js";
 import { EntityStore } from "./entity-store.js";
+import { FinalResponseBudget } from "./final-response-budget.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
@@ -84,6 +85,7 @@ export class ShadowMindRuntime {
   private readonly runner = new ShadowRunner();
   private readonly usageStore = new UsageStore(this.agentDir);
   private readonly active = new Map<string, ActiveRun>();
+  private readonly finalResponseBudget = new FinalResponseBudget();
   private readonly completionReview = new CompletionReview<PendingFinalRun>({
     currentEpoch: () => this.epoch,
     maxParallel: () => this.configStore.current.maxParallelShadows,
@@ -94,14 +96,8 @@ export class ShadowMindRuntime {
     launch: (pending, review) =>
       this.launchShadow({ ...pending, completionReview: review }),
     deliver: (reports) => void this.deliverReports(reports),
-    onReviewCompleted: (shadowIds) => {
-      for (const id of shadowIds) {
-        this.finalResponseRounds.set(
-          id,
-          (this.finalResponseRounds.get(id) ?? 0) + 1,
-        );
-      }
-    },
+    onReviewCompleted: (shadowIds) =>
+      this.finalResponseBudget.commit(shadowIds),
   });
   private readonly recentEvents: RuntimeEvent[] = [];
   private readonly recentRuns: Array<{
@@ -121,7 +117,6 @@ export class ShadowMindRuntime {
   private sessionUsage: ShadowUsage = zeroUsage();
   private shadowCount = 0;
   private completedWithFinalText = false;
-  private readonly finalResponseRounds = new Map<string, number>();
   private random: () => number = Math.random;
 
   constructor(private readonly pi: ExtensionAPI) {
@@ -150,7 +145,7 @@ export class ShadowMindRuntime {
       this.latestContext = ctx;
       this.modelCalls = 0;
       this.completedWithFinalText = false;
-      this.finalResponseRounds.clear();
+      this.finalResponseBudget.reset();
       this.sessionUsage = zeroUsage();
       this.recentRuns.length = 0;
       this.reports.reset();
@@ -169,7 +164,7 @@ export class ShadowMindRuntime {
       this.latestContext = ctx;
       if (event.source === "extension") return;
       this.completedWithFinalText = false;
-      this.finalResponseRounds.clear();
+      this.finalResponseBudget.reset();
       this.epoch += 1;
       this.abortAll("new-user-input");
     });
@@ -392,7 +387,8 @@ export class ShadowMindRuntime {
     const decision = decideFinalResponse({
       shadows: snapshot.shadows,
       mainModelId: fullModelId,
-      finalResponseRounds: this.finalResponseRounds,
+      canRunFinalResponse: (shadow) =>
+        this.finalResponseBudget.canRun(shadow),
     });
     this.record("final-response", {
       candidates: decision.candidates,

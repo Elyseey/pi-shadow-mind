@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FinalResponseBudget } from "../src/final-response-budget.js";
 import type { ReportBatcher } from "../src/report-batcher.js";
 import { ShadowMindRuntime } from "../src/runtime.js";
 import type { ShadowRunResult } from "../src/shadow-runner.js";
@@ -32,7 +33,7 @@ interface RuntimeInternals {
   batcher: ReportBatcher;
   refresh: (ctx: ExtensionContext) => Promise<RegistrySnapshot>;
   onFinalResponse: (ctx: ExtensionContext) => Promise<void>;
-  finalResponseRounds: Map<string, number>;
+  finalResponseBudget: FinalResponseBudget;
   registerEvents: () => void;
   onHeartbeat: (ctx: ExtensionContext, executedTools: ReadonlySet<string>) => Promise<void>;
   recentEvents: Array<{ kind: string; data?: Record<string, unknown> }>;
@@ -157,7 +158,7 @@ describe("ShadowMindRuntime session lifecycle", () => {
     } as unknown as ExtensionContext;
 
     await internals.onFinalResponse(context);
-    expect(internals.finalResponseRounds.get(finalShadow.id)).toBeUndefined();
+    expect(internals.finalResponseBudget.used(finalShadow.id)).toBe(0);
 
     internals.completionReview.invalidate();
     await internals.onFinalResponse(context);
@@ -191,7 +192,7 @@ describe("ShadowMindRuntime session lifecycle", () => {
     } as unknown as ExtensionContext;
 
     await internals.onFinalResponse(context);
-    expect(internals.finalResponseRounds.get(finalShadow.id)).toBeUndefined();
+    expect(internals.finalResponseBudget.used(finalShadow.id)).toBe(0);
 
     internals.completionReview.invalidate();
     await internals.onFinalResponse(context);
@@ -275,8 +276,11 @@ describe("ShadowMindRuntime session lifecycle", () => {
     await handlers.get("agent_settled")!({}, context);
 
     expect(schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0)).toHaveLength(1);
+    expect(internals.finalResponseBudget.used(finalShadow.id)).toBe(1);
+    expect(internals.finalResponseBudget.canRun(finalShadow)).toBe(false);
 
     handlers.get("input")!({ source: "interactive" }, context);
+    expect(internals.finalResponseBudget.used(finalShadow.id)).toBe(0);
     await handlers.get("agent_end")!(finalEvent, context);
     await handlers.get("agent_settled")!({}, context);
 
