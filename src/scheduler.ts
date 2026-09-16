@@ -172,10 +172,61 @@ export function matchesModel(
   shadow: ShadowDefinition,
   fullModelId: string,
 ): boolean {
-  return (
-    shadow.activeForModels.includes("*") ||
-    shadow.activeForModels.includes(fullModelId)
-  );
+  if (!shadow.activeForModels || shadow.activeForModels.length === 0) {
+    return false;
+  }
+
+  const negatives: string[] = [];
+  const positives: string[] = [];
+
+  for (const item of shadow.activeForModels) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("!")) {
+      const pattern = trimmed.slice(1).trim();
+      if (pattern) negatives.push(pattern);
+    } else {
+      positives.push(trimmed);
+    }
+  }
+
+  for (const neg of negatives) {
+    if (modelPatternMatches(neg, fullModelId)) {
+      return false;
+    }
+  }
+
+  if (positives.length === 0) {
+    return negatives.length > 0;
+  }
+
+  return positives.some((pos) => modelPatternMatches(pos, fullModelId));
+}
+
+function modelPatternMatches(pattern: string, fullModelId: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern === fullModelId) return true;
+
+  const slashIndex = fullModelId.indexOf("/");
+  const modelId =
+    slashIndex !== -1 ? fullModelId.slice(slashIndex + 1) : fullModelId;
+
+  if (!pattern.includes("/") && pattern === modelId) {
+    return true;
+  }
+
+  if (pattern.includes("*")) {
+    const regex = wildcardToRegex(pattern);
+    if (regex.test(fullModelId)) return true;
+    if (!pattern.includes("/") && regex.test(modelId)) return true;
+  }
+
+  return false;
+}
+
+function wildcardToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped.replace(/\*/g, ".*")}$`);
 }
 
 export function matchesActivationTools(

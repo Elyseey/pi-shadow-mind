@@ -7,10 +7,7 @@ import type { FinalResponseBudget } from "../src/final-response-budget.js";
 import type { ReportBatcher } from "../src/report-batcher.js";
 import { ShadowMindRuntime } from "../src/runtime.js";
 import type { ShadowRunResult } from "../src/shadow-runner.js";
-import type {
-  RegistrySnapshot,
-  ShadowDefinition,
-} from "../src/types.js";
+import type { RegistrySnapshot, ShadowDefinition } from "../src/types.js";
 import { zeroUsage, type ShadowUsage } from "../src/usage.js";
 
 type EventHandler = (event: unknown, context: ExtensionContext) => unknown;
@@ -35,7 +32,10 @@ interface RuntimeInternals {
   onFinalResponse: (ctx: ExtensionContext) => Promise<void>;
   finalResponseBudget: FinalResponseBudget;
   registerEvents: () => void;
-  onHeartbeat: (ctx: ExtensionContext, executedTools: ReadonlySet<string>) => Promise<void>;
+  onHeartbeat: (
+    ctx: ExtensionContext,
+    executedTools: ReadonlySet<string>,
+  ) => Promise<void>;
   recentEvents: Array<{ kind: string; data?: Record<string, unknown> }>;
   handleRunEnd: (
     runId: string,
@@ -140,7 +140,12 @@ describe("ShadowMindRuntime session lifecycle", () => {
 
   it("does not consume a round for an invalidated queued final review", async () => {
     const { internals } = createRuntimeHarness();
-    const finalShadow = { ...shadow, trigger: ["final_response"] as const, activeForModels: ["openai/gpt"], finalResponseRounds: 1 };
+    const finalShadow = {
+      ...shadow,
+      trigger: ["final_response"] as const,
+      activeForModels: ["openai/gpt"],
+      finalResponseRounds: 1,
+    };
     internals.refresh = vi.fn().mockResolvedValue({
       shadows: [finalShadow],
       diagnostics: [],
@@ -163,7 +168,9 @@ describe("ShadowMindRuntime session lifecycle", () => {
     internals.completionReview.invalidate();
     await internals.onFinalResponse(context);
 
-    expect(internals.recentEvents.at(-1)?.data?.activated).toEqual([finalShadow.id]);
+    expect(internals.recentEvents.at(-1)?.data?.activated).toEqual([
+      finalShadow.id,
+    ]);
   });
 
   it("does not consume a round if review is invalidated while running", async () => {
@@ -242,7 +249,12 @@ describe("ShadowMindRuntime session lifecycle", () => {
 
   it("limits final-response rounds per Shadow until new user input", async () => {
     const { handlers, internals } = createRuntimeHarness();
-    const finalShadow = { ...shadow, trigger: ["final_response"] as const, activeForModels: ["openai/gpt"], finalResponseRounds: 1 };
+    const finalShadow = {
+      ...shadow,
+      trigger: ["final_response"] as const,
+      activeForModels: ["openai/gpt"],
+      finalResponseRounds: 1,
+    };
     internals.refresh = vi.fn().mockResolvedValue({
       shadows: [finalShadow],
       diagnostics: [],
@@ -275,7 +287,9 @@ describe("ShadowMindRuntime session lifecycle", () => {
     await handlers.get("agent_end")!(finalEvent, context);
     await handlers.get("agent_settled")!({}, context);
 
-    expect(schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0)).toHaveLength(1);
+    expect(
+      schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0),
+    ).toHaveLength(1);
     expect(internals.finalResponseBudget.used(finalShadow.id)).toBe(1);
     expect(internals.finalResponseBudget.canRun(finalShadow)).toBe(false);
 
@@ -284,7 +298,9 @@ describe("ShadowMindRuntime session lifecycle", () => {
     await handlers.get("agent_end")!(finalEvent, context);
     await handlers.get("agent_settled")!({}, context);
 
-    expect(schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0)).toHaveLength(2);
+    expect(
+      schedule.mock.calls.filter(([, jobs]) => (jobs as unknown[]).length > 0),
+    ).toHaveLength(2);
   });
 
   it("abandons a final-review start superseded by new input during refresh", async () => {
@@ -349,10 +365,24 @@ describe("ShadowMindRuntime session lifecycle", () => {
 
     await turnEnd({ toolResults: [] }, context);
     expect(internals.onHeartbeat).not.toHaveBeenCalled();
-    expect(internals.recentEvents.at(-1)?.data?.reason).toBe("no-tool-activity");
+    expect(internals.recentEvents.at(-1)?.data?.reason).toBe(
+      "no-tool-activity",
+    );
 
-    await turnEnd({ toolResults: [{ toolName: "read" }, { toolName: "bash" }, { toolName: "read" }] }, context);
-    expect(internals.onHeartbeat).toHaveBeenCalledExactlyOnceWith(context, new Set(["read", "bash"]));
+    await turnEnd(
+      {
+        toolResults: [
+          { toolName: "read" },
+          { toolName: "bash" },
+          { toolName: "read" },
+        ],
+      },
+      context,
+    );
+    expect(internals.onHeartbeat).toHaveBeenCalledExactlyOnceWith(
+      context,
+      new Set(["read", "bash"]),
+    );
   });
 });
 

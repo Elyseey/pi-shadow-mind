@@ -111,7 +111,7 @@ frontmatter 包含以下运行字段：
 | `trigger` | 激活方式，可包含 `heartbeat`、`final_response` 或两者；默认 `[heartbeat]` |
 | `final_response_rounds` | 主 Agent 输出结束后的最大运行轮数。设为 `1` 时仅运行一次，避免反馈循环导致持续对话；缺省或 `0` 表示不限制 |
 | `activation_tools` | heartbeat 候选工具过滤；该 Main 轮次命中任意指定工具名即可，默认 `[]` 表示不限制；final_response 独立于此过滤 |
-| `active_for_models` | 适用于哪些 Main 模型；`"*"` 表示全部模型，省略时默认 `["*"]` |
+| `active_for_models` | 适用于哪些 Main 模型；`"*"` 表示全部模型，省略时默认 `["*"]`；支持 `"!pattern"` 排除语法及通配符 |
 | `run_with_model` | Shadow 自己使用的模型；省略时使用插件默认模型 |
 | `thinking_level` | Shadow 使用的 thinking level；省略时使用插件默认值，再回退到 Main 会话当前生效等级 |
 | `timeout_seconds` | Shadow 单次运行超时；省略时使用插件默认超时 |
@@ -119,7 +119,7 @@ frontmatter 包含以下运行字段：
 
 `name` 只用于 `shadow-report` 和状态界面展示，不参与身份判断；省略时回退到最终解析出的 `id`。Markdown 正文就是 Shadow 的认知定义、长期职责和行为要求。
 
-`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；模型过滤使用完整 ID 和精确值 `"*"` 进行匹配。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
+`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；模型过滤使用完整 ID、纯模型短名、精确值 `"*"` 及通配符进行匹配；支持以 `!` 开头的排除规则（如 `"!gpt-6-astra"` 或 `"!openai-codex/*"`），命中任一排除项即跳过该 Shadow；当列表仅包含排除规则时，默认正向范围为全量 `*`。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
 
 如果显式配置的 `run_with_model` 当前不存在、未认证或不可用，本次激活失败并写入轻量运行事件，不自动换用其他模型。只有省略该字段时才使用插件默认 Shadow 模型。
 

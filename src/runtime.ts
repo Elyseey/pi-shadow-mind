@@ -312,10 +312,7 @@ export class ShadowMindRuntime {
     const fullModelId = `${ctx.model.provider}/${ctx.model.id}`;
     const decision = decideHeartbeat({
       heartbeatProbability: config.heartbeatProbability,
-      availableSlots: Math.max(
-        0,
-        config.maxParallelShadows - this.active.size,
-      ),
+      availableSlots: Math.max(0, config.maxParallelShadows - this.active.size),
       shadows: snapshot.shadows,
       activeShadowIds: new Set(
         [...this.active.values()].map(({ shadow }) => shadow.id),
@@ -387,8 +384,7 @@ export class ShadowMindRuntime {
     const decision = decideFinalResponse({
       shadows: snapshot.shadows,
       mainModelId: fullModelId,
-      canRunFinalResponse: (shadow) =>
-        this.finalResponseBudget.canRun(shadow),
+      canRunFinalResponse: (shadow) => this.finalResponseBudget.canRun(shadow),
     });
     this.record("final-response", {
       candidates: decision.candidates,

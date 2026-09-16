@@ -5,6 +5,7 @@ import {
   decideHeartbeat,
   extractToolNames,
   matchesActivationTools,
+  matchesModel,
   shouldEvaluateFinalResponse,
   shouldEvaluateHeartbeat,
 } from "../src/scheduler.js";
@@ -24,7 +25,7 @@ const shadow = (
   activationProbability: probability,
   trigger,
   activeForModels: ["openai/gpt"],
-  ...(finalResponseRounds !== undefined ? { finalResponseRounds } : {}),
+  ...(finalResponseRounds === undefined ? {} : { finalResponseRounds }),
   tools: [],
   activationTools,
   prompt: id,
@@ -151,7 +152,12 @@ describe("decideHeartbeat", () => {
   });
 
   it("filters shadows by activationTools and records toolFiltered", () => {
-    const writeOnlyShadow = shadow("writer", 1, ["heartbeat"], ["bash", "edit", "write"]);
+    const writeOnlyShadow = shadow(
+      "writer",
+      1,
+      ["heartbeat"],
+      ["bash", "edit", "write"],
+    );
     const generalShadow = shadow("general", 1, ["heartbeat"], []);
 
     // Case 1: Only "read" was called -> writeOnlyShadow is toolFiltered
@@ -165,7 +171,9 @@ describe("decideHeartbeat", () => {
       random: () => 0.1,
     });
     expect(readTurnResult.toolFiltered).toEqual(["writer"]);
-    expect(readTurnResult.activated.map((a) => a.shadow.id)).toEqual(["general"]);
+    expect(readTurnResult.activated.map((a) => a.shadow.id)).toEqual([
+      "general",
+    ]);
 
     // Case 2: "edit" was called -> writeOnlyShadow is activated
     const editTurnResult = decideHeartbeat({
@@ -178,9 +186,10 @@ describe("decideHeartbeat", () => {
       random: () => 0.1,
     });
     expect(editTurnResult.toolFiltered).toEqual([]);
-    expect(
-      editTurnResult.activated.map((a) => a.shadow.id).sort(),
-    ).toEqual(["general", "writer"]);
+    expect(editTurnResult.activated.map((a) => a.shadow.id).sort()).toEqual([
+      "general",
+      "writer",
+    ]);
   });
 
   it("verifies user scenario: default global config + shadow with activation_tools=[bash, edit, write] and p=1", () => {
@@ -275,5 +284,104 @@ describe("decideFinalResponse", () => {
       "unlimited",
     ]);
     expect(result.roundFiltered).toEqual(["limited"]);
+  });
+});
+
+describe("matchesModel", () => {
+  it("matches wildcard * for any model", () => {
+    const s = { ...shadow("s"), activeForModels: ["*"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(true);
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(true);
+  });
+
+  it("matches exact full model ID", () => {
+    const s = { ...shadow("s"), activeForModels: ["openai-codex/gpt-6-astra"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(true);
+    expect(matchesModel(s, "openai-codex/gpt-5.5")).toBe(false);
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(false);
+  });
+
+  it("matches model ID without provider prefix", () => {
+    const s = { ...shadow("s"), activeForModels: ["gpt-6-astra"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(true);
+    expect(matchesModel(s, "custom-provider/gpt-6-astra")).toBe(true);
+    expect(matchesModel(s, "openai-codex/gpt-5.5")).toBe(false);
+  });
+
+  it("supports wildcard patterns", () => {
+    const s = { ...shadow("s"), activeForModels: ["anthropic/*"] };
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(true);
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(false);
+  });
+
+  it("excludes specific model by short name with wildcard (*, !shortName)", () => {
+    const s = { ...shadow("s"), activeForModels: ["*", "!gpt-6-astra"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(false);
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(true);
+    expect(matchesModel(s, "deepseek/deepseek-chat")).toBe(true);
+  });
+
+  it("excludes specific model by full provider/model ID", () => {
+    const s = {
+      ...shadow("s"),
+      activeForModels: ["*", "!openai-codex/gpt-6-astra"],
+    };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(false);
+    expect(matchesModel(s, "other-provider/gpt-6-astra")).toBe(true);
+    expect(matchesModel(s, "openai-codex/gpt-5.5")).toBe(true);
+  });
+
+  it("supports pure exclusion without explicit * wildcard", () => {
+    const s = { ...shadow("s"), activeForModels: ["!gpt-6-astra"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(false);
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(true);
+  });
+
+  it("supports wildcard exclusions", () => {
+    const s = { ...shadow("s"), activeForModels: ["*", "!*gpt*"] };
+    expect(matchesModel(s, "openai-codex/gpt-6-astra")).toBe(false);
+    expect(matchesModel(s, "openai/gpt-4o")).toBe(false);
+    expect(matchesModel(s, "anthropic/claude-3-7-sonnet")).toBe(true);
+  });
+
+  it("rejects empty activeForModels or invalid entries", () => {
+    const empty = { ...shadow("s"), activeForModels: [] };
+    expect(matchesModel(empty, "openai-codex/gpt-6-astra")).toBe(false);
+
+    const blankExclusion = {
+      ...shadow("s"),
+      activeForModels: ["*", "! ", " "],
+    };
+    expect(matchesModel(blankExclusion, "openai-codex/gpt-6-astra")).toBe(true);
+  });
+
+  it("integrates with scheduler decision to record excluded shadows in modelFiltered", () => {
+    const excludedShadow = {
+      ...shadow("reviewer", 1, ["final_response"]),
+      activeForModels: ["*", "!gpt-6-astra"],
+    };
+    const regularShadow = {
+      ...shadow("general", 1, ["final_response"]),
+      activeForModels: ["*"],
+    };
+
+    const decisionAstra = decideFinalResponse({
+      shadows: [excludedShadow, regularShadow],
+      mainModelId: "openai-codex/gpt-6-astra",
+    });
+    expect(decisionAstra.modelFiltered).toEqual(["reviewer"]);
+    expect(decisionAstra.activated.map((a) => a.shadow.id)).toEqual([
+      "general",
+    ]);
+
+    const decisionClaude = decideFinalResponse({
+      shadows: [excludedShadow, regularShadow],
+      mainModelId: "anthropic/claude-3-7-sonnet",
+    });
+    expect(decisionClaude.modelFiltered).toEqual([]);
+    expect(decisionClaude.activated.map((a) => a.shadow.id).sort()).toEqual([
+      "general",
+      "reviewer",
+    ]);
   });
 });
